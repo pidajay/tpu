@@ -33,6 +33,7 @@ from tensorflow.contrib.training.python.training import evaluation
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python.estimator import estimator
 from tensorflow.python.keras import backend as K
+import horovod.tensorflow as hvd
 
 
 FLAGS = flags.FLAGS
@@ -355,7 +356,10 @@ def mnasnet_model_fn(features, labels, mode, params):
     scaled_lr = FLAGS.base_learning_rate * (FLAGS.train_batch_size / 256.0)
     learning_rate = mnasnet_utils.build_learning_rate(scaled_lr, global_step,
                                                       params['steps_per_epoch'])
-    optimizer = mnasnet_utils.build_optimizer(learning_rate)
+    # Horovod: scale learning rate by the number of workers.
+    optimizer = mnasnet_utils.build_optimizer(learning_rate * hvd.size())
+    # Horovod: add Horovod Distributed Optimizer.
+    optimizer = hvd.DistributedOptimizer(optimizer)
     if FLAGS.use_tpu:
       # When using TPU, wrap the optimizer with CrossShardOptimizer which
       # handles synchronization details between different TPU cores. To the
@@ -399,6 +403,10 @@ def mnasnet_model_fn(features, labels, mode, params):
         # TPU loop is finished, setting max_queue value to the same as number of
         # iterations will make the summary writer only flush the data to storage
         # once per loop.
+        
+        # Horovod: save checkpoints only on worker 0 to prevent other workers from
+        # corrupting them.
+        # model_dir = FLAGS.model_dir if hvd.rank() == 0 else None
         with tf.contrib.summary.create_file_writer(
             FLAGS.model_dir, max_queue=FLAGS.iterations_per_loop).as_default():
           with tf.contrib.summary.always_record_summaries():
@@ -574,6 +582,13 @@ def export(est, export_dir, post_quantize=True):
 
 
 def main(unused_argv):
+  # Horovod: initialize Horovod.
+  hvd.init()
+
+  # Horovod: save checkpoints only on worker 0 to prevent other workers from
+  # corrupting them.
+  model_dir = FLAGS.model_dir #if hvd.rank() == 0 else None
+
   tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
       FLAGS.tpu if (FLAGS.tpu or FLAGS.use_tpu) else '',
       zone=FLAGS.tpu_zone,
@@ -582,10 +597,11 @@ def main(unused_argv):
   if FLAGS.use_async_checkpointing:
     save_checkpoints_steps = None
   else:
-    save_checkpoints_steps = max(100, FLAGS.iterations_per_loop)
+    save_checkpoints_steps = max(100, FLAGS.iterations_per_loop) if hvd.rank() == 0 else None
+
   config = tf.contrib.tpu.RunConfig(
       cluster=tpu_cluster_resolver,
-      model_dir=FLAGS.model_dir,
+      model_dir=model_dir,
       save_checkpoints_steps=save_checkpoints_steps,
       log_step_count_steps=FLAGS.log_step_count_steps,
       session_config=tf.ConfigProto(
@@ -596,6 +612,11 @@ def main(unused_argv):
           iterations_per_loop=FLAGS.iterations_per_loop,
           per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig
           .PER_HOST_V2))  # pylint: disable=line-too-long
+  
+  # Horovod: pin GPU to be used to process local rank (one GPU per process)
+  config.session_config.gpu_options.allow_growth = True
+  config.session_config.gpu_options.visible_device_list = str(hvd.local_rank())
+
   # Initializes model parameters.
   params = dict(steps_per_epoch=FLAGS.num_train_images / FLAGS.train_batch_size)
   mnasnet_est = tf.contrib.tpu.TPUEstimator(
@@ -607,6 +628,12 @@ def main(unused_argv):
       export_to_tpu=FLAGS.export_to_tpu,
       params=params)
 
+  # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
+  # rank 0 to all other processes. This is necessary to ensure consistent
+  # initialization of all workers when training is started with random weights or
+  # restored from a checkpoint.
+  bcast_hook = hvd.BroadcastGlobalVariablesHook(0)
+  
   # Input pipelines are slightly different (with regards to shuffling and
   # preprocessing) between training and evaluation.
   if FLAGS.bigtable_instance:
@@ -683,12 +710,13 @@ def main(unused_argv):
       if FLAGS.use_async_checkpointing:
         hooks.append(
             async_checkpoint.AsyncCheckpointSaverHook(
-                checkpoint_dir=FLAGS.model_dir,
+                checkpoint_dir=model_dir,
                 save_steps=max(100, FLAGS.iterations_per_loop)))
+      # Horovod: adjust number of steps based on number of GPUs.
       mnasnet_est.train(
           input_fn=imagenet_train.input_fn,
-          max_steps=FLAGS.train_steps,
-          hooks=hooks)
+          max_steps=FLAGS.train_steps // hvd.size(),
+          hooks=[hooks,bcast_hook])
 
     else:
       assert FLAGS.mode == 'train_and_eval'
