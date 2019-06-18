@@ -32,6 +32,7 @@ from tensorflow.contrib.tpu.python.tpu import async_checkpoint
 from tensorflow.contrib.training.python.training import evaluation
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python.estimator import estimator
+import horovod.tensorflow as hvd
 
 
 FLAGS = flags.FLAGS
@@ -273,8 +274,11 @@ def model_fn(features, labels, mode, params):
     features = tf.transpose(features, [3, 0, 1, 2])  # HWCN to NHWC
 
   # Normalize the image to zero mean and unit variance.
-  features -= tf.constant(MEAN_RGB, shape=[1, 1, 3], dtype=features.dtype)
-  features /= tf.constant(STDDEV_RGB, shape=[1, 1, 3], dtype=features.dtype)
+  # features -= tf.constant(MEAN_RGB, shape=[1, 1, 3], dtype=features.dtype)
+  # features /= tf.constant(STDDEV_RGB, shape=[1, 1, 3], dtype=features.dtype)
+  # ajay - for gpu
+  features -= tf.constant(MEAN_RGB, shape=[3, 1, 1], dtype=features.dtype)
+  features /= tf.constant(STDDEV_RGB, shape=[3, 1, 1], dtype=features.dtype)
 
   is_training = (mode == tf.estimator.ModeKeys.TRAIN)
   has_moving_average_decay = (FLAGS.moving_average_decay > 0)
@@ -363,7 +367,11 @@ def model_fn(features, labels, mode, params):
     scaled_lr = FLAGS.base_learning_rate * (FLAGS.train_batch_size / 256.0)
     learning_rate = utils.build_learning_rate(scaled_lr, global_step,
                                               params['steps_per_epoch'])
-    optimizer = utils.build_optimizer(learning_rate)
+    # Horovod: scale learning rate by the number of workers.
+    optimizer = utils.build_optimizer(learning_rate * hvd.size())
+    # Horovod: add Horovod Distributed Optimizer.
+    optimizer = hvd.DistributedOptimizer(optimizer)
+
     if FLAGS.use_tpu:
       # When using TPU, wrap the optimizer with CrossShardOptimizer which
       # handles synchronization details between different TPU cores. To the
@@ -559,7 +567,11 @@ def export(est, export_dir, input_image_size=None):
 
 
 def main(unused_argv):
-
+  # Horovod: initialize Horovod.
+  hvd.init()
+  # Horovod: save checkpoints only on worker 0 to prevent other workers from
+  # corrupting them.
+  # model_dir = FLAGS.model_dir #if hvd.rank() == 0 else None
   input_image_size = FLAGS.input_image_size
   if not input_image_size:
     if FLAGS.model_name.startswith('efficientnet'):
@@ -576,7 +588,7 @@ def main(unused_argv):
   if FLAGS.use_async_checkpointing:
     save_checkpoints_steps = None
   else:
-    save_checkpoints_steps = max(100, FLAGS.iterations_per_loop)
+    save_checkpoints_steps = max(100, FLAGS.iterations_per_loop) if hvd.rank() == 0 else None
   config = tf.contrib.tpu.RunConfig(
       cluster=tpu_cluster_resolver,
       model_dir=FLAGS.model_dir,
@@ -590,6 +602,11 @@ def main(unused_argv):
           iterations_per_loop=FLAGS.iterations_per_loop,
           per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig
           .PER_HOST_V2))  # pylint: disable=line-too-long
+  
+   # Horovod: pin GPU to be used to process local rank (one GPU per process)
+  config.session_config.gpu_options.allow_growth = True
+  config.session_config.gpu_options.visible_device_list = str(hvd.local_rank())
+  
   # Initializes model parameters.
   params = dict(
       steps_per_epoch=FLAGS.num_train_images / FLAGS.train_batch_size,
@@ -602,6 +619,12 @@ def main(unused_argv):
       eval_batch_size=FLAGS.eval_batch_size,
       export_to_tpu=FLAGS.export_to_tpu,
       params=params)
+
+  # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
+  # rank 0 to all other processes. This is necessary to ensure consistent
+  # initialization of all workers when training is started with random weights or
+  # restored from a checkpoint.
+  bcast_hook = hvd.BroadcastGlobalVariablesHook(0)
 
   # Input pipelines are slightly different (with regards to shuffling and
   # preprocessing) between training and evaluation.
@@ -682,10 +705,11 @@ def main(unused_argv):
             async_checkpoint.AsyncCheckpointSaverHook(
                 checkpoint_dir=FLAGS.model_dir,
                 save_steps=max(100, FLAGS.iterations_per_loop)))
+      # Horovod: adjust number of steps based on number of GPUs.
       est.train(
           input_fn=imagenet_train.input_fn,
-          max_steps=FLAGS.train_steps,
-          hooks=hooks)
+          max_steps=FLAGS.train_steps//hvd.size(),
+          hooks=[hooks,bcast_hook])
 
     else:
       assert FLAGS.mode == 'train_and_eval'
