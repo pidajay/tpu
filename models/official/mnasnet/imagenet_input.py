@@ -150,8 +150,13 @@ class ImageNetTFExampleInput(object):
     # computed according to the input pipeline deployment. See
     # tf.contrib.tpu.RunConfig for details.
     batch_size = params['batch_size']
-
-    if 'context' in params:
+    # ajay - added hvd to params to enable sharding for horovod
+    if 'hvd' in params:
+      tf.logging.info('ajay - hvd data sharding. Curr host: %d. Num hosts: %d', \
+        params['hvd_curr_host'], params['hvd_num_hosts'])
+      current_host = params['hvd_curr_host']
+      num_hosts = params['hvd_num_hosts']
+    elif 'context' in params:
       current_host = params['context'].current_input_fn_deployment()[1]
       num_hosts = params['context'].num_hosts
     else:
