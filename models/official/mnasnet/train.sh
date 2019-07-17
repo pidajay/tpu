@@ -1,4 +1,4 @@
-~/anaconda3/envs/tensorflow_p36/bin/mpirun -np 8 -hostfile hosts.txt -mca plm_rsh_no_tree_spawn 1 \
+mpirun -np 8 -hostfile hosts.txt -mca plm_rsh_no_tree_spawn 1 \
         -bind-to socket -map-by slot \
         -x HOROVOD_HIERARCHICAL_ALLREDUCE=1 -x HOROVOD_FUSION_THRESHOLD=16777216 \
         -x NCCL_MIN_NRINGS=4 -x LD_LIBRARY_PATH -x PATH -mca pml ob1 -mca btl ^openib \
