@@ -21,7 +21,7 @@ from __future__ import print_function
 import re
 import tensorflow as tf
 
-import mnasnet_model
+import mnasnet_model_xla as mnasnet_model
 
 
 class MnasNetDecoder(object):
@@ -310,7 +310,7 @@ def build_mnasnet_model(images, model_name, training, override_params=None):
   with tf.variable_scope(model_name):
     model = mnasnet_model.MnasNetModel(blocks_args, global_params)
     logits = model(images, training=training)
-
+  #model.summary()
   logits = tf.identity(logits, 'logits')
   return logits, model.endpoints
 
