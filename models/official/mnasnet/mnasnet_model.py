@@ -295,15 +295,15 @@ class MnasBlock(object):
       x = inputs
     tf.logging.info('Expand: %s shape: %s' % (x.name, x.shape))
 
-    # ajay - transpose to channels last just for depthwise conv
+    # Mnas optimize - transpose to channels last just for depthwise conv
     if self._global_params.data_format == 'channels_first':
       x = tf.transpose(x,[0,2,3,1])
-      tf.logging.info('DWConv: ajay transposing')
+      tf.logging.info('DWConv: Mnas optimize transposing')
     x = tf.nn.relu(self._bn1(self._depthwise_conv(x), training=training))
-    # ajay - transpose back
+    # Mnas optimize - transpose back
     if self._global_params.data_format == 'channels_first':
       x = tf.transpose(x, [0,3,1,2])
-      tf.logging.info('DWConv: ajay transposing back')
+      tf.logging.info('DWConv: Mnas optimize transposing back')
     tf.logging.info('DWConv: %s shape: %s' % (x.name, x.shape))
 
     if self.has_se:

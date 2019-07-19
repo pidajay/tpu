@@ -495,7 +495,7 @@ def mnasnet_model_fn(features, labels, mode, params):
     current_epoch = (
         tf.cast(global_step, tf.float32) / params['steps_per_epoch'])
 
-    # ajay - fix lr based on horovod here!!!!!
+    # Mnas optimize - fix lr based on horovod here!!!!!
     if FLAGS.use_horovod:
         scaled_lr = FLAGS.base_learning_rate * hvd.size()
     else:
@@ -504,7 +504,7 @@ def mnasnet_model_fn(features, labels, mode, params):
                                                       params['steps_per_epoch'], warmup_epochs=FLAGS.warmup_epochs)
    
     if FLAGS.use_horovod:
-      # ajay - note: the learning rate multiplier may not be necessary because of the
+      # Mnas optimize - note: the learning rate multiplier may not be necessary because of the
       # lr scaling performed above
       optimizer = mnasnet_utils.build_optimizer(learning_rate) # * hvd.size())
       optimizer = hvd.DistributedOptimizer(optimizer)
@@ -749,8 +749,17 @@ def export(est, export_dir, post_quantize=True):
 
 
 def main(unused_argv):
-  # ajay - set the proper image data format
+  # Mnas optimize - set the proper image data format
   tf.keras.backend.set_image_data_format(FLAGS.data_format)
+  # Mnas optimize - optimization flags
+  # gpu_thread_count = 2
+  # os.environ['TF_GPU_THREAD_MODE'] = 'gpu_private'
+  # os.environ['TF_GPU_THREAD_COUNT'] = str(gpu_thread_count)
+  # os.environ['TF_USE_CUDNN_BATCHNORM_SPATIAL_PERSISTENT'] = '1'
+  # os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
+  # enable mixed precision? -> Not much benefits seen yet
+  # os.environ["TF_ENABLE_AUTO_MIXED_PRECISION_GRAPH_REWRITE"] = "1"
+  
   # Horovod: initialize Horovod.
   if FLAGS.use_horovod:
     hvd.init()
