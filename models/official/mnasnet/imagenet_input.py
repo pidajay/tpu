@@ -151,7 +151,7 @@ class ImageNetTFExampleInput(object):
     # tf.contrib.tpu.RunConfig for details.
     batch_size = params['batch_size']
     # Mnas optimize - added hvd to params to enable sharding for horovod
-    if 'hvd' in params:
+    if 'hvd' in params and self.is_training:
       tf.logging.info('Mnas optimize - hvd data sharding. Curr host: %d. Num hosts: %d', \
         params['hvd_curr_host'], params['hvd_num_hosts'])
       current_host = params['hvd_curr_host']
