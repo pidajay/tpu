@@ -208,7 +208,7 @@ class MnasBlock(object):
           depthwise_initializer=conv_kernel_initializer,
           padding='same',
           use_bias=False,
-          data_format='channels_last')#self._global_params.data_format)
+          data_format=self._global_params.data_format)#'channels_last')#)
     else:
       self._depthwise_conv = legacy_layers.DepthwiseConv2D(
           [kernel_size, kernel_size],
@@ -216,7 +216,7 @@ class MnasBlock(object):
           depthwise_initializer=conv_kernel_initializer,
           padding='same',
           use_bias=False,
-          data_format='channels_last')#self._global_params.data_format)
+          data_format=self._global_params.data_format)#'channels_last')#self._global_params.data_format)
     self._bn1 = tf.layers.BatchNormalization(
         axis=self._channel_axis,
         momentum=self._batch_norm_momentum,
@@ -296,14 +296,14 @@ class MnasBlock(object):
     tf.logging.info('Expand: %s shape: %s' % (x.name, x.shape))
 
     # ajay - transpose to channels last just for depthwise conv
-    if self._global_params.data_format == 'channels_first':
-      x = tf.transpose(x,[0,2,3,1])
-      tf.logging.info('DWConv: ajay transposing')
+    # if self._global_params.data_format == 'channels_first':
+    #   x = tf.transpose(x,[0,2,3,1])
+    #   tf.logging.info('DWConv: ajay transposing')
     x = tf.nn.relu(self._bn1(self._depthwise_conv(x), training=training))
     # ajay - transpose back
-    if self._global_params.data_format == 'channels_first':
-      x = tf.transpose(x, [0,3,1,2])
-      tf.logging.info('DWConv: ajay transposing back')
+    # if self._global_params.data_format == 'channels_first':
+    #   x = tf.transpose(x, [0,3,1,2])
+    #   tf.logging.info('DWConv: ajay transposing back')
     tf.logging.info('DWConv: %s shape: %s' % (x.name, x.shape))
 
     if self.has_se:
